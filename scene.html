@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>3D House with Elevator & Responsive Entrance</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+    #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); color: #fff; font-size: 1.5rem; cursor: pointer; z-index: 1; }
+    canvas { display: block; }
+  </style>
+  <script type="importmap">
+  {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.module.js","three/examples/jsm/controls/PointerLockControls.js":"https://cdn.jsdelivr.net/npm/three@0.152.0/examples/jsm/controls/PointerLockControls.js"}}
+  </script>
+</head>
+<body>
+  <div id="overlay">Click to enter and use WASD / arrows to walk</div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
+    let scene,camera,renderer,controls;
+    const move={fwd:false,back:false,left:false,right:false};
+    const velocity=new THREE.Vector3();
+    let prevTime=performance.now();
+    const objects=[];
+    const downRay=new THREE.Raycaster();
+    const cameraHeight=1.8;
+    // Elevator config
+    // Pivot point used for distance checks
+    const doorCenter = new THREE.Vector3(0, 1.5, 5);
+
+    const elevatorSpeed=1,doorSpeed=0.5,doorOpenDistance=0.8;
+    const floorHeights={ground:0.1,first:4.1};
+    const elevatorPad={xMin:-4.5,xMax:-3.5,zMin:3.5,zMax:4.5};
+    let elevator,doorLeftElev,doorRightElev,elevatorActive=false,doorsOpenElev=false;
+    // Entrance config
+    let doorLeftMain,doorRightMain,frameLeft,frameRight,lintel,mainDoorOpen=false;
+    // Tight approach region
+    const entrancePad={xMin:-0.7,xMax:0.7,zMin:4.5,zMax:5.5};
+    init();animate();addWalls();
+    function init(){
+      scene=new THREE.Scene();scene.background=new THREE.Color(0xa0cfe1);
+      camera=new THREE.PerspectiveCamera(75,window.innerWidth/window.innerHeight,0.1,200);
+      camera.position.set(0,cameraHeight,15);
+      renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth,window.innerHeight);
+      renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+      document.body.appendChild(renderer.domElement);
+      const hemi=new THREE.HemisphereLight(0xffffff,0x444444,0.6);hemi.position.set(0,50,0);scene.add(hemi);
+      const dir=new THREE.DirectionalLight(0xffffff,0.8);dir.position.set(5,20,10);dir.castShadow=true;
+      dir.shadow.camera.top=15;dir.shadow.camera.bottom=-15;dir.shadow.camera.left=-15;dir.shadow.camera.right=15;scene.add(dir);
+      const loader=new THREE.TextureLoader();
+      const grassTex=loader.load('https://threejs.org/examples/textures/terrain/grasslight-big.jpg');
+      grassTex.wrapS=grassTex.wrapT=THREE.RepeatWrapping;grassTex.repeat.set(25,25);
+      const ground=new THREE.Mesh(new THREE.PlaneGeometry(200,200),new THREE.MeshStandardMaterial({map:grassTex}));
+      ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);objects.push(ground);
+      buildHouse();addMainEntrance();addElevator();
+      controls=new PointerLockControls(camera,document.body);scene.add(controls.getObject());
+      document.getElementById('overlay').addEventListener('click',()=>controls.lock());
+      controls.addEventListener('lock',()=>document.getElementById('overlay').style.display='none');
+      controls.addEventListener('unlock',()=>document.getElementById('overlay').style.display='flex');
+      document.addEventListener('keydown',onKeyDown);
+      document.addEventListener('keyup',onKeyUp);
+      window.addEventListener('resize',onResize);
+    }
+    function buildHouse(){
+      const w=new THREE.MeshStandardMaterial({color:0xffffff});
+      const f=new THREE.MeshStandardMaterial({color:0x8b5a2b});
+      const r=new THREE.MeshStandardMaterial({color:0x800000});
+      const gf=new THREE.Mesh(new THREE.BoxGeometry(10,4,10),w);gf.position.y=2;gf.castShadow=gf.receiveShadow=true;scene.add(gf);objects.push(gf);
+      const gF=new THREE.Mesh(new THREE.BoxGeometry(10,0.2,10),f);gF.position.y=floorHeights.ground;gF.receiveShadow=true;scene.add(gF);objects.push(gF);
+      const ff=new THREE.Mesh(new THREE.BoxGeometry(8,4,8),w);ff.position.set(0,6,0);ff.castShadow=ff.receiveShadow=true;scene.add(ff);objects.push(ff);
+      const fF=new THREE.Mesh(new THREE.BoxGeometry(8,0.2,8),f);fF.position.y=floorHeights.first;fF.receiveShadow=true;scene.add(fF);objects.push(fF);
+      const roof=new THREE.Mesh(new THREE.ConeGeometry(7,3,4),r);roof.position.set(0,10,0);roof.rotation.y=Math.PI/4;roof.castShadow=true;scene.add(roof);
+    }
+    // --- Replace your existing addMainEntrance() with this one ---
+// --- New addMainEntrance() without external wood.jpg texture ---
+function addMainEntrance() {
+  // Basic materials
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0xeeeeee,
+    transparent: true,
+    opacity: 0.4,
+    metalness: 0.1,
+    roughness: 0.5
+  });
+  const doorMat = new THREE.MeshStandardMaterial({
+    color: 0x8B4513,   // warm wood tone
+    metalness: 0.2,
+    roughness: 0.7
+  });
+  const handleMat = new THREE.MeshStandardMaterial({
+    color: 0xD4AF37,   // brass
+    metalness: 1,
+    roughness: 0.2
+  });
+
+  // Door frame
+  const frameGeo = new THREE.BoxGeometry(2.6, 3.4, 0.2);
+  const frame = new THREE.Mesh(frameGeo, frameMat);
+  frame.position.set(0, 1.7, 4.9);
+  scene.add(frame);
+
+
+
+  // Door leaves
+// updated door geometry for perfect fit
+const doorGeo = new THREE.BoxGeometry(1.2, 3.2, 0.15);
+
+// Left leaf
+doorLeftMain = new THREE.Mesh(doorGeo, doorMat);
+doorLeftMain.position.set(-0.65, 1.7, 5.075);   // x = half frame‑width minus half leaf‑width
+doorLeftMain.castShadow = doorLeftMain.receiveShadow = true;
+scene.add(doorLeftMain);
+
+// Right leaf
+doorRightMain = new THREE.Mesh(doorGeo, doorMat);
+doorRightMain.position.set( 0.65, 1.7, 5.075);
+doorRightMain.castShadow = doorRightMain.receiveShadow = true;
+scene.add(doorRightMain);
+
+
+  // Glass insets
+  const insetShape = new THREE.Shape();
+  insetShape.moveTo(-0.4, -1.0);
+  insetShape.lineTo(0.4, -1.0);
+  insetShape.lineTo(0.4, 0.5);
+  insetShape.absarc(0, 0.5, 0.4, 0, Math.PI, false);
+  const insetGeo = new THREE.ExtrudeGeometry(insetShape, { depth: 0.05, bevelEnabled: false });
+
+  const glassLeft = new THREE.Mesh(insetGeo, glassMat);
+  glassLeft.rotation.x = -Math.PI / 2;
+  glassLeft.position.set(-0.75, 1.5, 5.05);
+  scene.add(glassLeft);
+
+  const glassRight = glassLeft.clone();
+  glassRight.position.x = 0.75;
+  scene.add(glassRight);
+
+  // Brass handles
+  
+
+  // State flag for your animation logic
+  mainDoorOpen = false;
+}
+
+
+    function addElevator(){
+      const mat=new THREE.MeshStandardMaterial({color:0x888888});
+      elevator=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.2,1.5),mat);
+      elevator.position.set(-4,floorHeights.ground,4);elevator.receiveShadow=true;scene.add(elevator);objects.push(elevator);
+      doorLeftElev=new THREE.Mesh(new THREE.BoxGeometry(0.1,2,0.8),mat);
+      doorRightElev=new THREE.Mesh(new THREE.BoxGeometry(0.1,2,0.8),mat);
+      doorLeftElev.position.set(-4.4,1,3.25);doorRightElev.position.set(-3.6,1,3.25);
+      scene.add(doorLeftElev,doorRightElev);objects.push(doorLeftElev,doorRightElev);
+    }
+    function onKeyDown(e){['KeyW','ArrowUp'].includes(e.code)&&(move.fwd=true);['KeyS','ArrowDown'].includes(e.code)&&(move.back=true);['KeyA','ArrowLeft'].includes(e.code)&&(move.left=true);['KeyD','ArrowRight'].includes(e.code)&&(move.right=true);}    
+    function onKeyUp(e){['KeyW','ArrowUp'].includes(e.code)&&(move.fwd=false);['KeyS','ArrowDown'].includes(e.code)&&(move.back=false);['KeyA','ArrowLeft'].includes(e.code)&&(move.left=false);['KeyD','ArrowRight'].includes(e.code)&&(move.right=false);}    
+    const closedOffset = 0.6;
+    const openOffset   = 1.35;  
+    
+    function animate() {
+  requestAnimationFrame(animate);
+
+  const time = performance.now();
+  const delta = (time - prevTime) / 1000;
+  prevTime = time;
+
+  if (controls.isLocked) {
+    // 1) Gravity & ground collision
+    const pos = controls.getObject().position;
+    downRay.set(
+      new THREE.Vector3(pos.x, pos.y, pos.z),
+      new THREE.Vector3(0, -1, 0)
+    );
+    const hits = downRay.intersectObjects(objects);
+    const groundY = hits.length > 0 ? hits[0].point.y : 0;
+
+    if (pos.y > groundY + cameraHeight) {
+      velocity.y -= 30 * delta;
+    } else {
+      velocity.y = 0;
+      pos.y = groundY + cameraHeight;
+    }
+    pos.y += velocity.y * delta;
+
+    // 2) Movement damping & input
+    velocity.x -= velocity.x * 10 * delta;
+    velocity.z -= velocity.z * 10 * delta;
+    const speed = 30;
+    if (move.fwd)  velocity.z -= speed * delta;
+    if (move.back) velocity.z += speed * delta;
+    if (move.left) velocity.x += speed * delta;
+    if (move.right)velocity.x -= speed * delta;
+
+    controls.moveRight(-velocity.x * delta);
+    controls.moveForward(-velocity.z * delta);
+
+    // 3) Main‑door auto open/close by distance
+    const dist = pos.distanceTo(doorCenter);
+    const openDist  = 2.0;  // start opening when closer than this
+    const closeDist = 2.5;  // start closing when farther than this
+    const mv = doorSpeed * delta;
+
+    // OPEN
+    if (dist < openDist && !mainDoorOpen) {
+  if (doorLeftMain.position.x  > -openOffset) doorLeftMain.position.x  -= mv;
+  if (doorRightMain.position.x <  openOffset)  doorRightMain.position.x += mv;
+  if (doorLeftMain.position.x <= -openOffset) mainDoorOpen = true;
+}
+// CLOSE (now to ±0.6)
+else if (dist > closeDist && mainDoorOpen) {
+  if (doorLeftMain.position.x  < -closedOffset) doorLeftMain.position.x  += mv;
+  if (doorRightMain.position.x >  closedOffset) doorRightMain.position.x -= mv;
+  if (doorLeftMain.position.x >= -closedOffset) mainDoorOpen = false;
+}
+
+    // 4) Elevator logic (unchanged)
+    const atElev = pos.x > elevatorPad.xMin && pos.x < elevatorPad.xMax 
+                && pos.z > elevatorPad.zMin && pos.z < elevatorPad.zMax;
+    if (atElev) elevatorActive = true;
+
+    if (elevatorActive && !doorsOpenElev) {
+      const mv2 = doorSpeed * delta;
+      if (doorLeftElev.position.x  > -4 - doorOpenDistance/2)
+        doorLeftElev.position.x  -= mv2;
+      if (doorRightElev.position.x < -4 + doorOpenDistance/2)
+        doorRightElev.position.x += mv2;
+      if (doorLeftElev.position.x <= -4 - doorOpenDistance/2)
+        doorsOpenElev = true;
+    }
+
+    if (elevatorActive && doorsOpenElev && elevator.position.y < floorHeights.first) {
+      const dy = elevatorSpeed * delta;
+      elevator.position.y   += dy;
+      doorLeftElev.position.y  += dy;
+      doorRightElev.position.y += dy;
+      pos.y += dy;
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+
+// Call this after buildHouse(), addMainEntrance(), addElevator()
+addWalls();
+
+function addWalls() {
+  // thin walls, 4 units tall
+  const wallThickness = 0.1;
+  const wallHeight    = 4.0;
+  const houseSize     = 10;    // matches your ground‑floor 10×10 slab
+  const halfSize      = houseSize / 2;
+
+  // material shows only inside faces
+  const wallMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    side: THREE.BackSide
+  });
+
+  // Front wall (with door cutout)
+  const frontWallGeo = new THREE.BoxGeometry(houseSize, wallHeight, wallThickness);
+  const frontWall = new THREE.Mesh(frontWallGeo, wallMat);
+  frontWall.position.set(0, wallHeight/2, halfSize);    // z=+5
+  scene.add(frontWall);
+
+  // Back wall
+  const backWall = frontWall.clone();
+  backWall.position.set(0, wallHeight/2, -halfSize);    // z=-5
+  scene.add(backWall);
+
+  // Left wall
+  const sideWallGeo = new THREE.BoxGeometry(wallThickness, wallHeight, houseSize);
+  const leftWall = new THREE.Mesh(sideWallGeo, wallMat);
+  leftWall.position.set(-halfSize, wallHeight/2, 0);     // x=-5
+  scene.add(leftWall);
+
+  // Right wall
+  const rightWall = leftWall.clone();
+  rightWall.position.set(halfSize, wallHeight/2, 0);     // x=+5
+  scene.add(rightWall);
+
+  // (Optionally) First‑floor walls—just scale down and lift up
+  const ffScale = 0.8;    // 8×8 first floor
+  const ffHalf  = (houseSize * ffScale) / 2;
+  [frontWall, backWall].forEach(orig => {
+    const w = orig.clone();
+    w.scale.set(ffScale, 1, 1);
+    w.position.set(0, wallHeight + wallThickness + wallHeight/2, orig.position.z);
+    scene.add(w);
+  });
+  [leftWall, rightWall].forEach(orig => {
+    const w = orig.clone();
+    w.scale.set(1, 1, ffScale);
+    w.position.set(orig.position.x, wallHeight + wallThickness + wallHeight/2, 0);
+    scene.add(w);
+  });
+}
+
+
+    function onResize(){camera.aspect=window.innerWidth/window.innerHeight;camera.updateProjectionMatrix();renderer.setSize(window.innerWidth,window.innerHeight);}  
+  </script>
+</body>
+</html>
